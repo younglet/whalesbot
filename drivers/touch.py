@@ -1,0 +1,105 @@
+"""drivers/touch.py — 触碰传感器 driver
+
+dev_id=0x07, mode=2
+
+读取触碰传感器状态，返回 0（松开）或 1（按下）。
+
+用法:
+    python -m drivers.touch              # 自检
+    或在自己的脚本里:
+        from link import SerialWrap
+        from drivers.touch import Touch
+        serial_obj = SerialWrap()
+        touch = Touch(serial_obj, port=1)
+        if touch.is_pressed():
+            print("按下!")
+
+协议帧:
+    读取: struct.pack("<bbbH", 0x07, 0x02, port_id, 0)
+    响应: dev_id(1) + mode(1) + port_id(1) + value(2, unsigned short)
+
+实现参考:
+    _backup/mc602_ctl2.py: touch mode
+"""
+
+# Path bootstrap
+import sys, os
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+import time
+import struct
+
+
+# ---------------------------------------------------------------------------
+# 协议常量
+# ---------------------------------------------------------------------------
+
+_DEVICE_ID = 0x07
+_MODE = 0x02
+
+
+# ---------------------------------------------------------------------------
+# Touch
+# ---------------------------------------------------------------------------
+
+class Touch:
+    """触碰传感器（dev_id=0x07, mode=2）。
+
+    返回 0（未按下）或 1（按下）。
+    """
+
+    def __init__(self, serial, port=1):
+        if serial is None:
+            raise TypeError("serial 不能为 None")
+        if not hasattr(serial, "device") or not hasattr(serial, "get_anwser"):
+            raise TypeError(f"serial 必须是 SerialWrap 实例，收到 {type(serial).__name__}")
+        if not serial.device.name.startswith("mc602"):
+            raise RuntimeError(f"touch 仅支持 MC602，当前设备 {serial.device.name}")
+        self._serial = serial
+        self._port = port
+
+    def read(self):
+        """读取触碰状态。
+
+        Returns:
+            int: 0=松开, 1=按下，或 None（超时）
+        """
+        payload = struct.pack(
+            "<bbbH",
+            _DEVICE_ID, _MODE,
+            self._port, 0,
+        )
+        res = self._serial.get_anwser(payload, time_out=0.2)
+        if res is not None and len(res) >= 5:
+            # 响应: dev_id(1) + mode(1) + port_id(1) + value(2, unsigned short)
+            return struct.unpack("<H", res[3:5])[0]
+        return None
+
+    def is_pressed(self):
+        """是否按下。"""
+        val = self.read()
+        return val == 1 if val is not None else False
+
+
+# ---------------------------------------------------------------------------
+# 自检
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    from link import SerialWrap
+
+    print("== Touch 自检（10 秒，请触碰传感器）==")
+    serial_obj = SerialWrap()
+
+    start = time.time()
+    while time.time() - start < 10:
+        for port in range(1, 5):
+            touch = Touch(serial_obj, port=port)
+            if touch.is_pressed():
+                print(f"  Port {port}: 按下!")
+        time.sleep(0.15)
+
+    serial_obj.close()
+    print("== 完成 ==")
